@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<title>🗳️ DApp Bỏ Phiếu Blockchain</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: #f3f4f6;
+  padding: 30px;
+}
+
+h1 {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.container {
+  max-width: 1200px;
+  margin: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+}
+
+.wallet-card {
+  grid-column: span 2;
+}
+
+h3 {
+  margin-top: 0;
+}
+
+button {
+  width: 100%;
+  padding: 10px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary { background: #4f46e5; color: #fff; }
+.success { background: #16a34a; color: #fff; }
+.warning { background: #f59e0b; color: #fff; }
+.info { background: #0ea5e9; color: #fff; }
+.danger { background: #dc2626; color: #fff; }
+.gray { background: #6b7280; color: #fff; }
+
+input, select {
+  width: 100%;
+  padding: 8px;
+  margin-top: 6px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.candidate {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  margin-top: 10px;
+}
+
+#status {
+  margin-top: 25px;
+  padding: 16px;
+  background: #111827;
+  color: #fff;
+  border-radius: 10px;
+  font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🗳️ Ứng dụng Bỏ Phiếu Blockchain (Sepolia)</h1>
+
+<div class="container">
+
+<!-- WALLET -->
+<div class="card wallet-card">
+  <h3>🔌 Kết nối ví</h3>
+
+  <button class="primary" onclick="connectWallet()">Kết nối MetaMask</button>
+  <button class="danger" onclick="disconnectWallet()">Ngắt kết nối</button>
+
+  <label>Chọn tài khoản:</label>
+  <select id="accountSelect" onchange="changeAccount()"></select>
+</div>
+
+<!-- CONTRACT -->
+<div class="card wallet-card">
+  <h3>📜 Smart Contract</h3>
+
+  <label>Địa chỉ Contract:</label>
+  <input id="contractInput" placeholder="0x..." />
+
+  <button class="info" onclick="applyContract()">Áp dụng Contract</button>
+  <button class="gray" onclick="openEtherscan()">🔍 Xem trên Etherscan</button>
+</div>
+
+<!-- ADMIN -->
+<div class="card">
+  <h3>👤 Quản lý bầu cử</h3>
+  <button class="warning" onclick="addCandidate()">➕ Thêm ứng viên</button>
+</div>
+
+<!-- VOTING -->
+<div class="card">
+  <h3>🗳️ Danh sách ứng viên</h3>
+  <button class="info" onclick="loadCandidates()">🔄 Tải danh sách</button>
+  <div id="candidateList"></div>
+</div>
+
+<!-- QUERY -->
+<div class="card">
+  <h3>📊 Tra cứu thông tin bỏ phiếu</h3>
+
+  <button class="info" onclick="loadElectionInfo()">🔍 Xem thông tin bỏ phiếu</button>
+  <button class="info" onclick="checkMyVoteStatus()">👤 Kiểm tra tôi đã bỏ phiếu chưa</button>
+
+  <div id="electionInfo" style="margin-top:12px;font-size:14px;"></div>
+</div>
+
+</div>
+
+<div id="status">⏳ Sẵn sàng</div>
+
+<script type="module">
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/+esm";
+
+let provider, signer, contract;
+let CONTRACT_ADDRESS = null;
+let accounts = [];
+
+const ABI = [
+  { "inputs": [], "name": "addCandidate", "outputs": [], "type": "function" },
+  { "inputs": [{"type":"uint256","name":"candidateId"}], "name": "vote", "outputs": [], "type": "function" },
+  {
+    "inputs":[{"type":"uint256","name":"id"}],
+    "name":"getCandidate",
+    "outputs":[{"type":"uint256","name":"id"},{"type":"uint256","name":"voteCount"}],
+    "stateMutability":"view",
+    "type":"function"
+  },
+  { "inputs": [], "name": "candidateCount", "outputs": [{"type":"uint256"}], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "electionOfficial", "outputs": [{"type":"address"}], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "startTime", "outputs": [{"type":"uint256"}], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "endTime", "outputs": [{"type":"uint256"}], "stateMutability": "view", "type": "function" },
+  { "inputs": [{"type":"address"}], "name": "hasVoted", "outputs": [{"type":"bool"}], "stateMutability": "view", "type": "function" }
+];
+
+const setStatus = msg =>
+  document.getElementById("status").innerText = msg;
+
+async function switchToSepolia() {
+  await ethereum.request({
+    method: "wallet_switchEthereumChain",
+    params: [{ chainId: "0xaa36a7" }]
+  });
+}
+
+/* ===== WALLET ===== */
+window.connectWallet = async () => {
+  await ethereum.request({ method: "eth_requestAccounts" });
+  await switchToSepolia();
+
+  provider = new ethers.BrowserProvider(window.ethereum);
+  accounts = await provider.send("eth_accounts", []);
+
+  const select = document.getElementById("accountSelect");
+  select.innerHTML = "";
+  accounts.forEach(a => {
+    const o = document.createElement("option");
+    o.value = a;
+    o.textContent = a;
+    select.appendChild(o);
+  });
+
+  signer = await provider.getSigner(accounts[0]);
+  setStatus("✅ Đã kết nối MetaMask");
+};
+
+window.changeAccount = async () => {
+  signer = await provider.getSigner(
+    document.getElementById("accountSelect").value
+  );
+  if (CONTRACT_ADDRESS)
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+  setStatus("🔄 Đã đổi tài khoản");
+};
+
+window.disconnectWallet = () => {
+  provider = signer = contract = null;
+  CONTRACT_ADDRESS = null;
+  document.getElementById("candidateList").innerHTML = "";
+  document.getElementById("electionInfo").innerHTML = "";
+  setStatus("🔌 Đã ngắt kết nối");
+};
+
+/* ===== CONTRACT ===== */
+window.applyContract = () => {
+  const addr = document.getElementById("contractInput").value.trim();
+  if (!ethers.isAddress(addr)) return alert("Địa chỉ contract không hợp lệ");
+  if (!signer) return alert("Chưa kết nối ví");
+
+  CONTRACT_ADDRESS = addr;
+  contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+  setStatus("📜 Đã áp dụng contract");
+};
+
+window.openEtherscan = () => {
+  if (!CONTRACT_ADDRESS) return alert("Chưa có địa chỉ contract");
+  window.open(
+    `https://sepolia.etherscan.io/address/${CONTRACT_ADDRESS}`,
+    "_blank"
+  );
+};
+
+/* ===== CANDIDATES ===== */
+window.loadCandidates = async () => {
+  if (!contract) return alert("Chưa áp dụng contract");
+
+  const list = document.getElementById("candidateList");
+  list.innerHTML = "";
+
+  const count = await contract.candidateCount();
+
+  for (let i = 1; i <= count; i++) {
+    const c = await contract.getCandidate(i);
+
+    const div = document.createElement("div");
+    div.className = "candidate";
+    div.innerHTML = `
+      <b>Ứng viên #${c.id}</b><br>
+      🗳️ Số phiếu: ${c.voteCount}
+      <button class="success" onclick="vote(${c.id})">Bỏ phiếu</button>
+    `;
+    list.appendChild(div);
+  }
+
+  setStatus("📊 Đã tải danh sách ứng viên");
+};
+
+window.vote = async (id) => {
+  try {
+    setStatus("⏳ Đang bỏ phiếu...");
+    const tx = await contract.vote(id);
+    await tx.wait();
+    setStatus("✅ Bỏ phiếu thành công");
+    await loadCandidates();
+  } catch {
+    setStatus("❌ Không thể bỏ phiếu");
+  }
+};
+
+window.addCandidate = async () => {
+  try {
+    setStatus("⏳ Đang thêm ứng viên...");
+    const tx = await contract.addCandidate();
+    await tx.wait();
+    setStatus("✅ Đã thêm ứng viên");
+    await loadCandidates();
+  } catch {
+    setStatus("❌ Chỉ quản trị viên mới được thêm");
+  }
+};
+
+function formatTimeGMT7(timestamp) {
+  const date = new Date((timestamp + 7 * 3600) * 1000);
+
+  const pad = n => n.toString().padStart(2, "0");
+
+  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}, ` +
+         `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} (GMT+7)`;
+}
+
+/* ===== QUERY ===== */
+window.loadElectionInfo = async () => {
+  if (!contract) return alert("Chưa áp dụng contract");
+
+  const official = await contract.electionOfficial();
+  const start = Number(await contract.startTime());
+  const end = Number(await contract.endTime());
+  const count = await contract.candidateCount();
+  const now = Math.floor(Date.now() / 1000);
+
+  let status = "⏳ Chưa bắt đầu";
+  if (now >= start && now <= end) status = "🟢 Đang diễn ra";
+  if (now > end) status = "🔴 Đã kết thúc";
+
+  const remaining =
+    now < end ? Math.floor((end - now) / 60) + " phút" : "0";
+
+  document.getElementById("electionInfo").innerHTML = `
+    <b>👤 Người quản lý:</b><br>${official}<br><br>
+
+    <b>🕒 Thời gian bắt đầu:</b><br>
+    ${formatTimeGMT7(start)}<br><br>
+
+    <b>🕔 Thời gian kết thúc:</b><br>
+    ${formatTimeGMT7(end)}<br><br>
+
+    <b>📌 Trạng thái:</b> ${status}<br>
+    <b>⏳ Thời gian còn lại:</b> ${remaining}<br><br>
+
+    <b>👥 Tổng số ứng viên:</b> ${count}
+  `;
+};
+
+window.checkMyVoteStatus = async () => {
+  if (!contract || !signer) return;
+
+  const addr = await signer.getAddress();
+  const voted = await contract.hasVoted(addr);
+
+  document.getElementById("electionInfo").innerHTML =
+    voted ? "✅ Ví này đã bỏ phiếu" : "❌ Ví này chưa bỏ phiếu";
+};
+</script>
+
+</body>
+</html>
